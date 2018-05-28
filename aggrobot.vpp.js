@@ -4,7 +4,7 @@
 // @script-filename aggrobot.vpp.js
 // @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/Workflow/update.json
 // @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/aggrobot.vpp.js
-// @database-url    https://raw.githubusercontent.com/SimpleCreations/aggrobot/Workflow/database.json
+// @database-url    https://raw.githubusercontent.com/JaggetDoon/aggrobot/master/database.json
 // ==/VPPScript==
 
 const log = message => VPP.chats[0].log(`[AggroBot] ${message}`);
