@@ -1,10 +1,10 @@
 // ==VPPScript==
 // @name            AggroBot
-// @version         1.0.0
+// @version         1.0.1
 // @script-filename aggrobot.vpp.js
-// @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/update.json
+// @update-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/Workflow/update.json
 // @script-url      https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/aggrobot.vpp.js
-// @database-url    https://raw.githubusercontent.com/SimpleCreations/aggrobot/master/database.json
+// @database-url    https://raw.githubusercontent.com/SimpleCreations/aggrobot/Workflow/database.json
 // ==/VPPScript==
 
 const log = message => VPP.chats[0].log(`[AggroBot] ${message}`);
@@ -24,49 +24,44 @@ $.ajax({
     url: VPPScript.meta["update-url"],
     dataType: "json",
     cache: false
-})
-    .pipe(response => response["script_version"] ? response : $.Deferred().reject())
-    .done(response => {
+}).pipe(response => response["script_version"] ? response : $.Deferred().reject()).done(response => {
 
-        if (compareVersions(response["script_version"], VPPScript.meta["version"]) < 0) {
-            return log(`Вы используете устаревший скрипт.<br>
+    if (compareVersions(response["script_version"], VPPScript.meta["version"]) < 0) {
+        return log(`Вы используете устаревший скрипт.<br>
 Текущая версия: ${VPPScript.meta["version"]}<br>
 Последняя версия: ${response["script_version"]}<br>
 Введите "/aggrobot download", чтобы скачать последнюю версию.`);
-        }
-        log("Вы используете последнюю версию скрипта.");
+    }
+    log("Вы используете последнюю версию скрипта.");
 
-        if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
-        const currentDatabaseVersion = VPPScript.storage.databaseVersion;
-        if (!currentDatabaseVersion || compareVersions(response["database_version"], currentDatabaseVersion) < 0) {
+    if (!response["database_version"]) return log("Не удалось получить последнюю версию базы сообщений.");
+    const currentDatabaseVersion = VPPScript.storage.databaseVersion;
+    if (!currentDatabaseVersion || compareVersions(response["database_version"], currentDatabaseVersion) < 0) {
 
-            log(!currentDatabaseVersion ? "Идёт скачивание базы сообщений..." : "Идёт обновление базы сообщений...");
-            $.ajax({
-                url: VPPScript.meta["database-url"],
-                dataType: "json",
-                cache: false
-            })
-                .done(database => {
-                    VPPScript.storage.database = database;
-                    VPPScript.storage.databaseVersion = response["database_version"];
-                    VPPScript.storage.save();
-                    log("База сообщений успешно " + (!currentDatabaseVersion ? "загружена." : "обновлена."));
-                    enableScript();
-                })
-                .fail(() => {
-                    log("Не удалось скачать базу сообщений.");
-                    if (currentDatabaseVersion) enableScript();
-                });
+        log(!currentDatabaseVersion ? "Идёт скачивание базы сообщений..." : "Идёт обновление базы сообщений...");
+        $.ajax({
+            url: VPPScript.meta["database-url"],
+            dataType: "json",
+            cache: false
+        }).done(database => {
+            VPPScript.storage.database = database;
+            VPPScript.storage.databaseVersion = response["database_version"];
+            VPPScript.storage.save();
+            log("База сообщений успешно " + (!currentDatabaseVersion ? "загружена." : "обновлена."));
+            enableScript();
+        }).fail(() => {
+            log("Не удалось скачать базу сообщений.");
+            if (currentDatabaseVersion) enableScript();
+        });
 
-            VPP.chats.forEach(chat =>
-                chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () =>
-                    chat.log("[AggroBot] Скрипт начнёт работу только по завершении загрузки базы сообщений.")));
+        VPP.chats.forEach(chat =>
+            chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () =>
+                chat.log("[AggroBot] Скрипт начнёт работу только по завершении загрузки базы сообщений.")));
 
-        }
-        else enableScript();
+    }
+    else enableScript();
 
-    })
-    .fail(() => log("Не удалось получить данные об обновлении."));
+}).fail(() => log("Не удалось получить данные об обновлении."));
 
 const enableScript = () => {
 
@@ -101,12 +96,60 @@ const enableScript = () => {
         chat.addEventListener(VPP.Chat.Event.CONNECTED, "aggrobot", () => {
 
             // Генерируем новое состояние бота и готовим приветственное сообщение
-            aggroBot.reset();
-            aggroBot.prepareResponse();
+            chat.messageSent = false;
+            chat.aggrobotWasActive = false;
+            if (AggroBot.autoStart) {
+                aggroBot.reset();
+                chat.aggrobotWasActive = true;
+            }
+
+            // Обращаемся к деанонимайзеру
+            if (AggroBot.deanonEnabled && AggroBot.deanonURL) {
+
+                // Если включён деанонимайзер, то ожидаем ответа от него в течение некоторого времени перед тем, как запрашивать приветствие
+                const chatId = chat.chatId;
+                let responseRequested = false;
+                setTimeout(() =>
+                    !responseRequested && (responseRequested = true) &&
+                    chat.chatId == chatId && !aggroBot.messagesReceived && aggroBot.prepareResponse(), 1750);
+
+                VPP.ajax({
+                    url: AggroBot.deanonURL,
+                    data: {
+                        guid: chat.guidOpp
+                    },
+                    cache: false,
+                    success: function(response) {
+
+                        if (chat.chatId != chatId) return;
+
+                        response = JSON.parse(response);
+                        if (Array.isArray(response["log"])) response["log"].forEach(row => console.log("%c" + row, "color: #AA0000;"));
+
+                        if (!response["gender"] && !response["name"] && !response["vk"]) chat.log("Деанонимайзер не нашёл данных об этом пользователе");
+                        else aggroBot.processDeanonResult((gender => {
+                            return gender == "male" ? AggroBot.UserProfile.Gender.MALE :
+                                gender == "female" ? AggroBot.UserProfile.Gender.FEMALE : undefined;
+                        })(response["gender"]), response["name"], response["vk"]);
+
+                        if (!responseRequested) {
+                            responseRequested = true;
+                            if (!aggroBot.messagesReceived) aggroBot.prepareResponse();
+                        }
+
+                    }
+                });
+
+            }
+
+            // Иначе просто готовим приветствие
+            else if (aggroBot.active) aggroBot.prepareResponse();
 
         });
 
         chat.addEventListener(VPP.Chat.Event.MESSAGE_RECEIVED, "aggrobot", (type, content) => {
+
+            if (!aggroBot.active) return;
 
             let request;
             switch (type) {
@@ -130,11 +173,15 @@ const enableScript = () => {
                     break;
             }
             aggroBot.receiveMessage(request);
-            aggroBot.prepareResponse(request);
+            aggroBot.prepareResponse(request, chat.messageSent);
 
         });
 
+        chat.addEventListener(VPP.Chat.Event.MESSAGE_DELIVERED, "aggrobot", () => chat.messageSent = true);
+
         chat.addEventListener(VPP.Chat.Event.USER_STARTED_TYPING, "aggrobot", () => {
+
+            if (!aggroBot.active) return;
 
             // Если собеседник начал печатать во время ответа бота, бот на короткое время "отвлекается" от набора текста
             aggroBot.waitForOpponent();
@@ -144,7 +191,7 @@ const enableScript = () => {
         chat.addEventListener(VPP.Chat.Event.DISCONNECTED, "aggrobot", () => {
 
             chat.setFinishedTyping();
-            aggroBot.suspend();
+            if (aggroBot.active) aggroBot.suspend();
 
         });
 
@@ -162,6 +209,12 @@ const AggroBot = class {
         this.suspend();
 
         if (this._database) this._database.reset();
+
+        /**
+         * Работает ли бот
+         * @type {boolean}
+         */
+        this.active = true;
 
         /**
          * ID таймеров различных откладываемых действий
@@ -215,6 +268,13 @@ const AggroBot = class {
          * @private
          */
         this._intendsToLeave = false;
+
+        /**
+         * Количество сообщений, отправленных ботом.
+         * Используется для оценки актуальности тех или иных сообщений от собеседника.
+         * @type {number}
+         */
+        this.messagesReceived = 0;
 
         /**
          * Информация о пользователе
@@ -285,10 +345,11 @@ const AggroBot = class {
     }
 
     /**
-     * Останавливает работу бота
+     * Приостанавливает работу бота
      */
     suspend() {
 
+        this.active = false;
         clearTimeout(this._readTimeout);
         this._readTimeout = null;
         clearTimeout(this._typeTimeout);
@@ -301,18 +362,29 @@ const AggroBot = class {
     }
 
     /**
+     * Возобновляет работу бота
+     */
+    resume() {
+
+        this.active = true;
+        this._clearQueue();
+
+    }
+
+    /**
      * Уведомляет бота о том, что ему отослали сообщение
      * @param {AggroBot.Request} request Сообщение от собеседника
      */
     receiveMessage(request) {
 
         // Пытаемся определить пол
-        if (request.type === AggroBot.Request.Type.TEXT) this._determineGender(request.text);
+        if (request.type === AggroBot.Request.Type.TEXT) this._determineGenderAndName(request.text);
 
         // Полученное сообщение считается активностью, поэтому сбрасываем счётчик
         this._inactivityCounter = 0;
         this._intendsToLeave = false;
 
+        this.messagesReceived++;
         this._directResponse = true;
 
         // Смотрим, есть ли в очереди ответы, которые должны быть удалены из очереди во время получения сообщения
@@ -347,7 +419,7 @@ const AggroBot = class {
             this._spamRequest = null;
             this._ignoringPrepareRequests = this._spamDetector.state === AggroBot.SpamDetector.State.IGNORING;
             if (!this._ignoringPrepareRequests && this._responseQueue[0] && this._responseQueue[0].isSpamResponse) {
-                this._removeNextQueuedResponse();
+                while(this._responseQueue[0] && this._responseQueue[0].isSpamResponse) this._removeNextQueuedResponse();
                 this._setQueueUpdated();
             }
         }
@@ -359,18 +431,21 @@ const AggroBot = class {
     /**
      * Готовит и откладывает ответ собеседнику
      * @param {AggroBot.Request} request Сообщение от собеседника
+     * @param {boolean} withoutGreeting Нужно ли пропустить приветствие
      */
-    prepareResponse(request = null) {
+    prepareResponse(request = null, withoutGreeting = false) {
 
         if (this._ignoringPrepareRequests || request != null && this._spamRequest == request) return;
 
         // Отправляем приветствие
         if (!this._greeted) {
             this._greeted = true;
-            this._processAndAddToQueue(this._getMessage("greetings"), {
-                discardOnMessage: true
-            });
-            return;
+            if (!withoutGreeting) {
+                this._processAndAddToQueue(this._getMessage("greetings"), {
+                    discardOnMessage: true
+                });
+                return;
+            }
         }
 
         // Проверяем, занят ли бот
@@ -382,9 +457,12 @@ const AggroBot = class {
 
         // Пытаемся найти ответ по регулярному выражению или на особые типы контента
         if (request != null) switch (request.type) {
+
             case AggroBot.Request.Type.TEXT:
+
+                // Ответ на запрос фото
                 if (!this._photoSent &&
-                        /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
+                        /(фот|селфи)[а-яё]* (себя |сво[еёию] )?(с?кин(ь|еш)|кида(й|еш)|го(?![а-я])|давай|сдела(й|еш)|(при|вы|ото)шл(и|еш)|отправ(ь|иш))|(кин|кида|([^а-яё]|^)го|дава|сдела|(при|вы|ото)шл|отправ)(и|й|еш|иш)?ь? (себя |сво[еёию] )?(фот|селфи)|сфот(к?а|огр[ао]фиру)й(ся| себя)/i.test(request.text) &&
                         !this._responseQueue.some(queued => queued.pattern == "photo_sending")) {
                     this._processAndAddToQueue(this._getMessage("photo_sending"), Object.assign({
                         pattern: "photo_sending"
@@ -400,17 +478,157 @@ const AggroBot = class {
                     allowSecondary = false;
                     break;
                 }
+
+                // Ответ на запрос ВКонтакте; установка флага, если собеседник пишет, что у него нет ВКонтакте; обработка ссылки на страницу
+                if (AggroBot.vkEnabled) {
+                    let matches;
+                    if (/(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|сыл(ку|ь)( на)?|линк(ани)?|записан)(( ты)? свой| ты| в)? (вк|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег|в(ай|и)бер|в[оа](тс|ц)ап)|(вк[оа][а-я]+|vk|id|айди|одноклас+ники|фб|fb|фейсбук|facebook|телег(у|рам+)|в(ай|и)бер|в[оа](тс|ц)ап+)( свой)? (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|с+ыл(ку|ь)|линк)/i.test(request.text) ||
+                        /(кинь|скажи|напиши|пришли|дай|давай|([^а-яё]|^)го|отправь|черкани|лучше) ([ст]во[ейю]|ты|сам|с+ыл(ку|ь))|([ст]во[ейю]|ты|сам|сыл(ку|ь)) (с?кинь|скажи|напиши|пришли|дай|давай|го|отправь|черкани|лучше|первы[йм])/i.test(request.text) && typeof this._userProfile.vkRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                        this._processAndAddToQueue(this._getMessage(!this._userProfile.vkSent ? "vk_response" : "vk_already_sent"), defaultOptions);
+                        added = true;
+                    } else if (/(у )?меня (нет )?(в )?(вк|стра)|^нет вк/i.test(request.text) || /у меня (его )?нет|не зарег|^нету$|не сижу/i.test(request.text) && this.messagesReceived - this._userProfile.vkRequestedAt <= 6) {
+                        console.log("User does not have VK profile");
+                        this._userProfile.vkUserDoesNotHave = true;
+                    } else if (this.messagesReceived - this._userProfile.vkRequestedAt <= 10 && (matches = request.text.match(/(?:(?:https?:\/\/)?vk\.com)?(\/?id\d+|\/[a-z][\w.]{4,})/i))) {
+                        const vk = matches[1].replace("/", "");
+                        if (this._userProfile.vk) {
+                            if (this._userProfile.vk != vk) {
+                                this._processAndAddToQueue(this._getMessage("vk_another_profile"), defaultOptions);
+                                added = true;
+                            }
+                        } else if (vk == AggroBot.vkCustomURL || vk == AggroBot.vkIdURL) {
+                            this._processAndAddToQueue(this._getMessage("vk_myself"), defaultOptions);
+                            added = true;
+                        } else if (vk == "id0") {
+                            this._processAndAddToQueue(this._getMessage("vk_id0"), defaultOptions);
+                            added = true;
+                        } else {
+                            this._processAndAddToQueue(this._getMessage("vk_acknowledged"), defaultOptions);
+                            added = true;
+                            VPP.ajax({
+                                url: "https://api.vk.com/method/users.get",
+                                data: {
+                                    "lang": "ru",
+                                    "access_token": AggroBot.vkToken,
+                                    "v": "5.69",
+                                    "user_ids": vk,
+                                    "fields": "sex,photo_max_orig"
+                                },
+                                success: response => {
+                                    response = JSON.parse(response);
+                                    if (response["error"] && response["error"]["error_code"] == 113) VPP.ajax({
+                                        url: "https://vk.com/" + vk,
+                                        success: response => {
+                                            if (response == "error" || $(response).is(":contains('Страница удалена либо ещё не создана')")) {
+                                                this._processAndAddToQueue(this._getMessage("vk_does_not_exists"), defaultOptions);
+                                            } else {
+                                                this._processAndAddToQueue(this._getMessage("vk_invalid"), defaultOptions);
+                                            }
+                                        }
+                                    });
+                                    else {
+                                        this._userProfile.vk = vk;
+                                        const profile = response["response"][0];
+                                        if (profile["sex"]) {
+                                            this._userProfile.gender = profile["sex"] == 2 ? AggroBot.UserProfile.Gender.MALE : AggroBot.UserProfile.Gender.FEMALE;
+                                            this.onReport("Пол ВКонтакте: " + (profile["sex"] == 2 ? "мужской" : "женский"));
+                                        }
+                                        const name = profile["first_name"];
+                                        if (!this._userProfile.name || !(this._userProfile.nameConfirmed || this._userProfile.name == name)) {
+                                            this._userProfile.name = name;
+                                            this.onReport(`Имя ВКонтакте: ${name}`);
+                                        }
+                                        if (response["photo_max_orig"] == "https://vk.com/images/camera_400.png") {
+                                            this._processAndAddToQueue(this._getMessage("vk_no_avatar"), defaultOptions);
+                                            console.log("Profile does not have an avatar");
+                                        } else VPP.ajax({
+                                            url: "https://www.google.com/searchbyimage?hl=ru&image_url=" + response["photo_max_orig"],
+                                            headers: {
+                                                "Accept-Language": "ru;q=1"
+                                            },
+                                            success: response => {
+                                                const description = $(response).find(":contains('Скорее всего, на картинке')").last().find("a").text();
+                                                console.log(`Google's image guess: ${description}`);
+                                                if (description) VPP.ajax({
+                                                    url: "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=ru&dt=t&q=" + encodeURIComponent(description),
+                                                    success: response => {
+
+                                                        const translated = JSON.parse(response)[0][0][0].toLowerCase();
+                                                        console.log(`Translated Google's image guess: ${translated}`);
+                                                        if (/^(дженте?льмен|кожаный пиджак|девушка|шапочка|мотоциклетный шлем|дружба|сидящий|стоящий|толстовка с капюшоном|селфи|пользователь|свадебное платье|деловой человек|человек|мужчина|парень|личность|свитер|военная форма)$/.test(translated)) {
+
+                                                            this._processAndAddToQueue(this._getMessage("vk_avatar_person"), defaultOptions);
+                                                            console.log(`Assuming a person`);
+
+                                                        } else {
+
+                                                            let gender = 0;
+                                                            if (/[ая]$/.test(translated)) gender = 1;
+                                                            else if (/[ое]$/.test(translated)) gender = 2;
+                                                            this._variables["vkavatarobjectgender"] = (...args) => args[gender];
+
+                                                            const accusative = translated.replace(/[ая]я?(?![а-яё])/g, match => {
+                                                                return match.replace(/а/g, "у").replace(/я/g, "ю");
+                                                            });
+                                                            this._variables["vkavatarobject"] = wordsCase => wordsCase == "accusative" ? accusative : translated;
+
+                                                            this._processAndAddToQueue(this._getMessage("vk_avatar_object"), defaultOptions);
+                                                            console.log(`Assuming an object`);
+
+                                                        }
+
+                                                    }
+                                                });
+                                            }
+                                        });
+                                    }
+                                }
+                            });
+                        }
+                    }
+                }
+
+
+                // Ответы на реакцию на запрос подтверждения имени
+                if (typeof this._userProfile.nameConfirmationRequestedAt !== "undefined" && this.messagesReceived - this._userProfile.nameConfirmationRequestedAt <= 6) {
+                    if (this._userProfile.name && /(как|откуда)( ты)?( меня)? (узнал|знаеш|угадал)|^как\??$|меня помниш/i.test(request.text)) {
+                        this._processAndAddToQueue(this._getMessage("name_source"), defaultOptions);
+                        this._userProfile.nameConfirmed = true;
+                        added = true;
+                        console.log("Name confirmed");
+                        break;
+                    } else if (/^(а+|э+м+)?[^а-я]*да+([^а-яё]|$)|[^н]. угадал|^(угадал|почти|ага)|(^конечно|именно|верно|почти|допустим|прикинь|возможно|^а ч(то|[её])|^(ну )?и( что| ч[её])?)[^а-я]*$|^(\+|ну)$/i.test(request.text)) {
+                        this._userProfile.nameConfirmed = true;
+                        console.log("Name confirmed");
+                        break;
+                    } else if (/^не([та\-]| верно| угадал|$)|^(мен)?я не |^мимо[^а-я]*$|^-$/i.test(request.text) && !this._userProfile.nameConfirmed) {
+                        this._processAndAddToQueue(this._getMessage("name_incorrect"), defaultOptions);
+                        this._userProfile.name = undefined;
+                        this._userProfile.nameConfirmed = false;
+                        this._userProfile.nameAskedAt = this.messagesReceived;
+                        added = true;
+                        console.log("Name rejected");
+                        break;
+                    }
+                }
+
+                // Ответы по регулярному выражению
                 const {message, pattern} = this._getAnswer(request.text);
                 if (message != null) this._processAndAddToQueue(message, Object.assign({
                     pattern: pattern
                 }, defaultOptions)) && (added = true);
+
                 break;
+
             case AggroBot.Request.Type.PHOTO:
+
                 if (!this._responseQueue.some(queued => queued.pattern == "photo")) this._processAndAddToQueue(this._getMessage("photo"), Object.assign({
                     pattern: "photo"
                 }, defaultOptions)) && (added = true);
                 break;
+
             case AggroBot.Request.Type.STICKER:
+
                 const databaseKey = `sticker_${request.stickerGroupName}`;
                 if (this._database.has(databaseKey) && !this._responseQueue.some(queued => queued.pattern == "sticker")) {
                     const message = this._getMessage(databaseKey);
@@ -419,6 +637,39 @@ const AggroBot = class {
                     }, defaultOptions)) && (added = true);
                 }
                 break;
+
+        }
+
+        // Добавляем в очередь уточнение имени собеседника, а также рифму к имени
+        if (!added && ready && this._userProfile.name && !this._userProfile.nameConfirmed &&
+                Math.random() < AggroBot.getNameConfirmationProbability(this._userProfile.nameConfirmationRequests)) {
+            console.log("Reporting name...");
+            this._userProfile.nameConfirmationRequests++;
+            this._processAndAddToQueue(this._getMessage("name_confirmation"), defaultOptions);
+            this._userProfile.nameConfirmationRequestedAt = this._userProfile.nameAskedAt = this.messagesReceived;
+            added = true;
+        }
+        if (!added && ready && this._userProfile.nameConfirmed && !this._userProfile.nameRhymed &&
+                Math.random() < AggroBot.PROBABILITY_NAME_RHYME) {
+            const rhyme = AggroBot.nameVariations.split(",").indexOf(this._userProfile.name) == -1 ?
+                this._getNameRhyme() : this._getMessage("name_same");
+            if (rhyme) {
+                console.log("Got a rhyme to the name...");
+                this._processAndAddToQueue(rhyme, defaultOptions);
+                added = true;
+                allowSecondary = false;
+            }
+            else console.log("No rhymes to this name");
+            this._userProfile.nameRhymed = true;
+        }
+
+        // Добавляем в очереди запрос ВКонтакте
+        if (AggroBot.vkEnabled && AggroBot.vkToken && !added && ready && !this._userProfile.vk && !this._userProfile.vkUserDoesNotHave &&
+                Math.random() < AggroBot.getVKRequestProbability(this._userProfile.vkRequests)) {
+            this._userProfile.vkRequests++;
+            this._processAndAddToQueue(this._getMessage("vk_request"), defaultOptions);
+            this._userProfile.vkRequestedAt = this.messagesReceived;
+            added = true;
         }
 
         // Добавялем в очередь условный ответ
@@ -708,6 +959,8 @@ const AggroBot = class {
                         return genderName[Math.floor(Math.random() * genderName.length)];
                     }
                     return (this._userProfile.gender === AggroBot.UserProfile.Gender.MALE ? args[0] : args[1]) || "";
+                case "userprofilename":
+                    return this._userProfile.name || "";
                 case "d":
                 case "direct":
                     if (!this._directResponse) invalid = true;
@@ -722,6 +975,8 @@ const AggroBot = class {
                     return AggroBot.lastName.toLowerCase();
                 case "shortname":
                     return AggroBot.shortName.toLowerCase();
+                case "vk":
+                    return "https://vk.com/" + (AggroBot.vkUseIdURL ? AggroBot.vkIdURL : AggroBot.vkCustomURL);
                 case "m":
                 case "match":
                     return (matches[+(args[0] || 0)] || "").toLowerCase();
@@ -748,7 +1003,7 @@ const AggroBot = class {
                 }
                 case "timehour": {
                     const now = new Date();
-                    return (now.getHours() + (now.getMinutes() > 25)) % 24 || 12;
+                    return (now.getHours() + (now.getMinutes() > 25)) % 12 || 12;
                 }
                 case "timeofday": {
                     const now = new Date();
@@ -760,6 +1015,9 @@ const AggroBot = class {
                 }
                 case "timedayofweek":
                     return ["воскресенье", "понедельник", "вторник", "среда", "четверг", "пятница", "суббота"][new Date().getDay()];
+                case "asksname":
+                    this._userProfile.nameAskedAt = this.messagesReceived;
+                    break;
                 default:
                     if (typeof this._variables[name] === "string") return this._variables[name];
                     else if (typeof this._variables[name] === "function") return this._variables[name].apply(this, args);
@@ -780,8 +1038,9 @@ const AggroBot = class {
      */
     _getMessage(databaseKey) {
 
-        const message = this._processMessage(this._getRawMessage(databaseKey));
-        return message != null ? message : this._getMessage(databaseKey);
+        let message = null;
+        while (this._database.hasAvailable(databaseKey) && !message) message = this._processMessage(this._getRawMessage(databaseKey));
+        return message;
 
     }
 
@@ -868,7 +1127,6 @@ const AggroBot = class {
                         replacement = `${word} ${match}`;
                         changed = true;
                     }
-                    else console.log(`@@@ Not inserting because ${p1} or ${lastWord} == ${word} or ${lastWord} is a prop or conj`);
                 }
                 lastWord = p1;
                 return replacement;
@@ -932,24 +1190,40 @@ const AggroBot = class {
 
         // Добавляем заглавные буквы
         if (this._style.capitalize) typosResult.forEach(queued =>
-            queued.message = queued.message[0].toUpperCase() + queued.message.substring(1));
+            queued.message.indexOf("http") != 0 &&
+                (queued.message = queued.message.charAt(0).toUpperCase() + queued.message.substring(1)));
 
         return typosResult;
 
     }
 
     /**
-     * Пытается определить пол по сообщению и записать в профиль
+     * Пытается определить имя и пол по сообщению и записать в профиль
      * @param message
      * @private
      */
-    _determineGender(message) {
+    _determineGenderAndName(message) {
 
-        let gender;
-        if (/((^[^а-яё]*я? ?|([^а-я]|^)я ([а-яё]+[ \-])*)([жд](?=$|\s?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)|(^|[^а-яё])я [а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|((я|меня) |^)(Александра|Алина|Алиса|Алла|Аля|Анастасия|Настя|Анна|Аня|Адель|Валерия|Вера|Виктория|Вика|Галя|Дарья|Даша|Диана|Ева|Евгения|Екатерина|Катя|Катюша|Елена|Лена|Ленка|Лера|Елизавета|Лиза|Элиза|Ира|Ирина|Ирочка|Карина|Кира|Кристина|Ксения|Ксюша|Лариса|Лида|Лидия|Лилия|Лиля|Люба|Людмила|Люда|Людочка|Маргарита|Марго|Рита|Марина|Мария|Маша|Милена|Мила|Надежда|Надя|Наталья|Наташа|Ната|Ника|Нина|Оксана|Олеся|Ольга|Оля|Полина|Поля|Светлана|Света|Светка|Софья|Софа|Соня|Татьяна|Таня|Танюша|Ульяна|Уля|Юлия|Юля|Юлька|Яна)([^а-яё?]|$)/i.test(message)) {
+        // Когда нашли имя:
+        // Если было написано "меня зовут", то сохраняем его без дополнительных проверок.
+        // Если просто написано имя, то смотрим, спрашивал ли его бот недавно.
+        const onNameMatched = matches => {
+            if (matches[1] && !matches[2] || this.messagesReceived - (this._userProfile.nameAskedAt || 0) <= 6) {
+                this._userProfile.name = matches[3].charAt(0).toUpperCase() + matches[3].substring(1).toLowerCase();
+                this._userProfile.nameConfirmed = true;
+            }
+        };
+
+        let gender, matches;
+        if (matches = message.match(/((?:я|меня(?: зовут)?) |^(нет,? )?)(А[лр]и[нс]а|Агата|Аделина|Адель|Аида|Ал[её]на|Алевтина|Александра|Алла|Альбина|Аля|Анастасия|Анжел+а|Анжели[кн]а|Анна|Анфиса|Аня|Ася|Белла|Валентина|Валерия|Валя|Варвара|Варя|Вика|Виктория|Вилена|Виолет+а|Виталина|Галина|Галя|Дарина|Дарья|Даша|Диа?на|Ева|Евгения|Евдокия|Екатерина|Елена|Елизавета|Жанна|Злата|Зоя|Зина|Зинаида|Инга|Инесса|Инна|Ира|Ирина|Ирочка|Карина|Каролина|Катюша|Катя|Кира|Кристина|Ксения|Ксюша|Лара|Лариса|Ленк?а|Лера|Лида|Лидия|Лиза|Лилия|Лиля|Лина|Лия|Люба|Люда|Людмила|Людочка|Маргарита|Марго|Марина|Мария?|Марьяна|Маша|Мил[еа]на|Мила|Надежда|Надя|Наст[её]на|Настю[хш]а|Настя|Ната|Наталья|Наташа|Ника|Николь|Нина|Оксана|Олеся|Ольга|Оля|Полина|Поля|Раиса|Регина|Рената|Рита|Роза|Розалия|Руфина|Саша [дж]|Светк?а|Светлана|Снежана|Соня|Софа|Софья|Т[ао]мара|Таисия|Танюша|Таня|Татьяна|Тая|Тома|Ульяна|Уля|Фаина|Фатима|Эвелина|Эл+ина|Элеонора|Эл[иь]за|Эль[вм]ира|Эля|Эмилия|Эмма|Эрика|Юли?я|Юлька|Яна|Ярослава)(?:[^а-яё?]|$)/i)) {
             gender = AggroBot.UserProfile.Gender.FEMALE;
-        }
-        else if (/((^[^а-яё]*я? ?|([^а-я]|^)я ([а-яё]+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина)?)|(^|[^а-яё])я [а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?)($|[^а-яё])|((я|меня) |^)(Александр|Саша|Алексей|Леша|Леха|Андрей|Антон|Тоха|Артем|Артур|Ваня|Василий|Вася|Виктор|Витя|Виталий|Владимир|Вова|Влад|Глеб|Григорий|Георгий|Гриша|Данил|Даниил|Данила|Денис|Дмитрий|Дима|Евгений|Женя|Егор|Иван|Игорь|Илья|Илюха|Кирилл|Костя|Макс|Максим|Матвей|Михаил|Миша|Миха|Никита|Николай|Коля|Колян|Олег|Павел|Паша|Рома|Роман|Семен|Сема|Сергей|Сережа|Стас|Тимур|Юрий|Юра)([^а-яё?]|$)/i.test(message)) {
+            onNameMatched(matches);
+        } else if (matches = message.match(/((?:я|меня(?: зовут)?) |^(нет,? )?)(Адам|Аким|Александр|Алексей|Анатолий|Андрей|Андрю[хш]а|Антон|Аркадий|Аркаша|Арсен|Арсений|Арт[её]м|Арт[её]мий|Артур|Афанасий|Богдан|Борис|Боря|Вади[мк]|Валентин|Валерий|Ваня|Василий|Вася|Вениамин|Веня|Виктор|Витали[йк]|Витя|Влад|Владимир|Владислав|Владлен|Вовк?а|Всеволод|Всеслав|Вячеслав|Ген+адий|Гена|Георгий|Герман|Глеб|Григорий|Гриша|Давид|Даниил|Данила?|Даня|Демьян|Денис|Дима|Дмитрий|Евгений|Егор|Женя|Жора|Жорик|Захар|Иван|Игнат|Игнатий|Игорь|Ил+арион|Илья|Илю[хш]а|Инн+окентий|Иосиф|Кеша|Кирилл|Колян?|Константин|Костик|Костя|Л[её]ня|Л[её]ха|Л[её]ша|Лев|Леонид|Макар|Макс|Максим|Марат|Марк|Матвей|Мирослав|Миха|Михаил|Миша|Никита|Николай|Олег|П[её]тр|Павел|Паша|Петя|Платон|Р[еи]нат|Радислав|Роберт|Родион|Рома|Роман|Ростислав|Руслан|С[её]ма|Сав+а|Савелий|Саша|Святослав|Сем[её]н|Сеня|Сер[её][гж]а|Серафим|Сергей|Славк?а|Ст[её]па|Станислав|Стас|Степан|Тима|Тимофей|Тимур|Толик|Толя|Тоха|Ф[её]дор|Федя|Феликс|Филипп|Филя|Эдик|Эдуард|Эмиль|Эрик|Эрнест|Юлий|Юра|Юрий|Яков|Ян|Ярослав|Назар|Гоша|Славик|[ЭИ]льдар)(?:[^а-яё?]|$)/i)) {
+            gender = AggroBot.UserProfile.Gender.MALE;
+            onNameMatched(matches);
+        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)([жд](?=$| ?[.,])|дев(оч|ч[ео]н|уш)ка|женщина|женского|баба|телка|тянк?а?|дама)|(^|[^а-яё])я (бы )?[а-яё]{3,}(ая|[кл]а))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не (м|парень?|пацан|мальчик|муж(ик|чина)?|чувак)($|[^а-яё])|у меня нет (хуя|члена|яиц)/i.test(message) && !/^почему/i.test(message)) {
+            gender = AggroBot.UserProfile.Gender.FEMALE;
+        } else if (/((^[^а-яё]*я? ?|([^а-я]|^)я (([а-мо-яё]|н(?!е))+[ \-])*)(м|парень?|пацан|мальчик|муж(ик|чина|ского)?)|(^|[^а-яё])я (бы )?[а-яё]{2,}(ый|л))($|[^а-яё?][^?.]*\.|[^а-яё?](?![^?]*\?))|я (ведь )?не ([жд]|дев(оч|ч[ео]н|уш)ка|женщина|баба|телка|тянк?а?|дама)($|[^а-яё])/i.test(message) && !/^почему/i.test(message)) {
             gender = AggroBot.UserProfile.Gender.MALE;
         }
 
@@ -959,6 +1233,41 @@ const AggroBot = class {
                 this._userProfile.gender = gender;
                 if (this._responseQueue.length) this._clearQueue();
             }
+        }
+
+    }
+
+    /**
+     *
+     * @param {number} [gender] Пол
+     * @param {string} [name] Имя
+     * @param {string} [vk] Ссылка на профиль ВКонтакте
+     */
+    processDeanonResult(gender, name, vk) {
+
+        if (typeof gender !== "undefined") {
+            this.onReport(`Деанонимайзер: пол: ${gender === AggroBot.UserProfile.Gender.MALE ? "мужской" : "женский"}`);
+            this._userProfile.gender = gender;
+        }
+
+        if (typeof name !== "undefined") {
+            name = name.charAt(0).toUpperCase() + name.substring(1);
+            this.onReport(`Деанонимайзер: имя: ${name}`);
+            this._userProfile.name = name;
+        }
+
+    }
+
+    /**
+     * Подбирает рифму к имени из профиля собеседника
+     * @returns {string}
+     * @private
+     */
+    _getNameRhyme() {
+
+        for (let matcher of this._database.nameRhymes) {
+            const {response} = matcher.match(this._userProfile.name);
+            if (response) return response.string;
         }
 
     }
@@ -996,7 +1305,7 @@ Object.assign(AggroBot, {
     /**
      * Время, в течение которого бот делает фотографию
      */
-    TIME_TO_MAKE_PHOTO: 8000,
+    TIME_TO_MAKE_PHOTO: 10000,
 
     /**
      * Время, на которое бот прерывается, когда замечает, что собеседник печатает, мс
@@ -1033,7 +1342,7 @@ Object.assign(AggroBot, {
      * @returns {number}
      */
     getSplitProbabilityByCurrentPart(message) {
-        return 2 / (1 + Math.exp(-0.044 * message.length)) + 1;
+        return 2 / (1 + Math.exp(-0.09 * message.length)) - 1;
     },
 
     /**
@@ -1088,6 +1397,11 @@ Object.assign(AggroBot, {
     },
 
     /**
+     * Включать ли бота в начале диалога
+     */
+    autoStart: VPPScript.storage.get("autoStart") || true,
+
+    /**
      * Внутреннее имя бота
      */
     firstName: "Антон",
@@ -1103,9 +1417,71 @@ Object.assign(AggroBot, {
     shortName: "Тоха",
 
     /**
+     * Все варианты имени бота
+     */
+    nameVariations: "Антон,Антоша,Антошка,Антоха,Тоха",
+
+    /**
      * Ссылка на фото, которое бот будет отправлять в чат
      */
-    selfieURL: "https://s17.postimg.org/wv15aam4f/image.jpg"
+    selfieURL: "https://s9.postimg.cc/ioeejq9rj/image.jpg",
+
+    /**
+     * Включена ли возможность приёма, отправки и обработки профилей ВКонтакте
+     */
+    vkEnabled: VPPScript.storage.get("vkEnabled") || true,
+
+    /**
+     * Токен API ВКонтакте
+     */
+    vkToken: VPPScript.storage.get("vkToken") || undefined,
+
+    /**
+     * Короткая ссылка на профиль ВКонтакте бота
+     */
+    vkCustomURL: "4etkiy_poz",// toxa4etkiy
+
+    /**
+     * Ссылка на профиль ВКонтакте бота с ID
+     */
+    vkIdURL: "id471643183",
+
+    /**
+     * Будет ли бот присылать собеседникам ссылку с ID вместо короткой
+     */
+    vkUseIdURL: true,
+
+    /**
+     * Будет ли использоваться деанонимайзер для определения пола, имени и профиля ВКонтакте собеседника
+     * по его идентификатору ЧатВдвоем
+     */
+    deanonEnabled: VPPScript.storage.get("deanonEnabled") || false,
+
+    /**
+     * Ссылка на деанонимайзер
+     */
+    deanonURL: VPPScript.storage.get("deanonURL") || undefined,
+
+    /**
+     * Получает вероятность того, что бот уточнит у собеседника его имя
+     * @param {number} amountOfRequests Количество запросов
+     */
+    getNameConfirmationProbability(amountOfRequests) {
+        return 1 / (10 * (amountOfRequests + 1));
+    },
+
+    /**
+     * Вероятность того, что бот придумает рифму к имени собеседника
+     */
+    PROBABILITY_NAME_RHYME: 1,
+
+    /**
+     * Получает вероятность того, что бот попросит ВКонтакте у собеседника
+     * @param {number} amountOfRequests Количество запросов
+     */
+    getVKRequestProbability(amountOfRequests) {
+        return 1 / (12.5 * (amountOfRequests / 2 + 1));
+    }
 
 });
 
@@ -1295,6 +1671,11 @@ AggroBot.Database = class {
          */
         this.conditional = new Map();
 
+        /**
+         * @type {Array<AggroBot.Matcher>}
+         */
+        this.nameRhymes = [];
+
     }
 
     /**
@@ -1318,6 +1699,17 @@ AggroBot.Database = class {
     has(key) {
 
         return this[key] instanceof AggroBot.ResponseSet;
+
+    }
+
+    /**
+     * Определяет, если ли в множестве ответов с данным ключом доступные ответы
+     * @param {string} key
+     * @returns {boolean}
+     */
+    hasAvailable(key) {
+
+        return !!this[key].totalAvailable;
 
     }
 
@@ -1403,6 +1795,12 @@ Object.assign(AggroBot.Database, {
             database.conditional.set(key, set);
         });
 
+        if (typeof raw.name_rhymes === "object") Object.keys(raw.name_rhymes).forEach(names => {
+            const set = new AggroBot.ResponseSet();
+            raw.name_rhymes[names].forEach(string => set.add(new AggroBot.Response(new String(string))));
+            database.nameRhymes.push(new AggroBot.Matcher(new RegExp("^(?:" + names.replace(/,/g, "|") + ")$"), set));
+        });
+
         return database;
 
     },
@@ -1426,6 +1824,9 @@ Object.assign(AggroBot.Database, {
         anotherDatabase.conditional.forEach((set, key) =>
             database.conditional.set(key, set.clone()));
 
+        anotherDatabase.nameRhymes.forEach(matcher =>
+            database.nameRhymes.push(new AggroBot.Matcher(matcher.regExp, matcher.responses.clone())));
+
         return database;
 
     }
@@ -1444,7 +1845,7 @@ AggroBot.ResponseSet = class {
     constructor() {
 
         this._array = [];
-        this._totalAvailable = 0;
+        this.totalAvailable = 0;
 
     }
 
@@ -1455,7 +1856,7 @@ AggroBot.ResponseSet = class {
     add(response) {
 
         this._array.push(response);
-        this._totalAvailable++;
+        this.totalAvailable++;
 
     }
 
@@ -1474,8 +1875,8 @@ AggroBot.ResponseSet = class {
      */
     reset() {
 
-        this._totalAvailable = 0;
-        this.forEach(response => !response.unique && ++this._totalAvailable && (response.used = false));
+        this.totalAvailable = 0;
+        this.forEach(response => !response.unique && ++this.totalAvailable && (response.used = false));
 
     }
 
@@ -1484,7 +1885,7 @@ AggroBot.ResponseSet = class {
      */
     hardReset() {
 
-        this._totalAvailable = this._array.length;
+        this.totalAvailable = this._array.length;
         this.forEach(response => response.used = false);
 
     }
@@ -1495,17 +1896,14 @@ AggroBot.ResponseSet = class {
      */
     getRandom() {
 
-        if (!this._totalAvailable) {
-            this.reset();
-            if (!this._totalAvailable) return null;
-        }
+        if (!this.totalAvailable) return null;
 
-        const index = Math.floor(Math.random() * this._totalAvailable);
+        const index = Math.floor(Math.random() * this.totalAvailable);
         let counter = 0;
         for (let response of this._array) if (!response.used) {
             if (index == counter) {
                 response.used = true;
-                this._totalAvailable--;
+                if (!--this.totalAvailable) this.reset();
                 return response;
             }
             counter++;
@@ -1606,9 +2004,75 @@ AggroBot.UserProfile = class {
 
         /**
          * Гендер
-         * @type {AggroBot.UserProfile.Gender}
+         * @type {number}
          */
         this.gender = AggroBot.UserProfile.Gender.MALE;
+
+        /**
+         * Имя
+         * @type {string}
+         */
+        this.name = undefined;
+
+        /**
+         * Каким по порядку сообщением бот уточнил имя у собеседника
+         * @type {number}
+         */
+        this.nameConfirmationRequestedAt = undefined;
+
+        /**
+         * Количество уточнений имени у собеседника
+         * @type {number}
+         */
+        this.nameConfirmationRequests = 0;
+
+        /**
+         * Подтвердил ли собеседник имя
+         * @type {boolean}
+         */
+        this.nameConfirmed = false;
+
+        /**
+         * Отвечал ли бот рифмой к имени
+         * @type {boolean}
+         */
+        this.nameRhymed = false;
+
+        /**
+         * Каким по порядку сообщением бот спросил имя у собеседника
+         * @type {number}
+         */
+        this.nameAskedAt = undefined;
+
+        /**
+         * Каким по порядку сообщением бот спросил ВКонтакте у собеседника
+         * @type {number}
+         */
+        this.vkRequestedAt = undefined;
+
+        /**
+         * Количество запросов ВКонтакте от бота
+         * @type {number}
+         */
+        this.vkRequests = 0;
+
+        /**
+         * Отправил ли бот ссылку на свой профиль ВКонтакте
+         * @type {boolean}
+         */
+        this.vkSent = false;
+
+        /**
+         * Ссылка на ВКонтакте собседника
+         * @type {undefined}
+         */
+        this.vk = undefined;
+
+        /**
+         * true, если у собеседника нет ВКонтакте
+         * @type {boolean}
+         */
+        this.vkUserDoesNotHave = false;
 
     }
 
@@ -1757,7 +2221,7 @@ AggroBot.Style = class {
      */
     insertTypos(string) {
 
-        const match = string.match(/^[^а-яё]+/i);
+        const match = string.match(/^[^а-яё\d]+/i);
         let result = match ? match[0] : "";
         const corrections = [];
 
@@ -1776,7 +2240,7 @@ AggroBot.Style = class {
             let typos = 0;
             for (let i = 0; i < part.length; i++) {
                 if (Math.random() < this.typoProbability) {
-                    console.log(`making a typo in "${part}" @ ${i}`);
+                    // console.log(`making a typo in "${part}" @ ${i}`);
                     typos++;
                     let random = Math.random();
                     if (random < this.swapTypoProbability && i != part.length - 1) newPart += part[i + 1] + part[i++];
@@ -1801,8 +2265,8 @@ AggroBot.Style = class {
                 if (lastCorrected) corrections[corrections.length - 1] += " " + matches[1];
                 else if (Math.random() < AggroBot.Style._getTypeCorrectionProbability(typos) *
                     Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1)) {
-                    console.log("Adding correction, prob: " + AggroBot.Style._getTypeCorrectionProbability(typos) *
-                        Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1));
+                    // console.log("Adding correction, prob: " + AggroBot.Style._getTypeCorrectionProbability(typos) *
+                    //     Math.pow(this.typoCorrectionProbabilityMultiplier, corrections.length + 1));
                     corrections.push(matches[1]);
                     lastCorrected = true;
                 }
@@ -1827,7 +2291,8 @@ AggroBot.Style = class {
             const wordRegExp = AggroBot.Style.wordRegExp;
             wordRegExp.lastIndex = 0;
             const letterRegExp = /[аеёиоуыэюя](?=[а-яё])/g;
-            let result = "";
+            const match = string.match(/^[^а-яё\d]+/i);
+            let result = match ? match[0] : "";
             let matches;
             while (matches = wordRegExp.exec(string)) {
                 const part = matches[0];
@@ -1838,7 +2303,7 @@ AggroBot.Style = class {
                 }
                 result += part.replace(letterRegExp, (letter, offset) => {
                     if ("аоеи".indexOf(letter) == -1 || Math.random() > this.misspellProbability[0]) return letter;
-                    console.log(`misspelling "${part}" with type 0 @ ${offset}`);
+                    // console.log(`misspelling "${part}" with type 0 @ ${offset}`);
                     switch (letter) {
                         case "а": return "о";
                         case "о": return "а";
@@ -1869,7 +2334,7 @@ AggroBot.Style = class {
             const type = index + 1;
             string = string.replace(regExp, (...matches) => {
                 if (Math.random() > this.misspellProbability[type]) return matches[0];
-                console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
+                // console.log(`misspelling "${string}" with type ${type} @ ${matches[matches.length - 2]}`);
                 switch (type) {
                     case 1:
                         return "т" + (matches[1] ? "" : "ь") + "ся";
@@ -1969,7 +2434,7 @@ Object.assign(AggroBot.Style, {
     PREPOSITIONS_OR_CONJUNCTIONS: [
         "без", "в", "вне", "во", "вроде", "возле", "внутрь", "внутри", "вокруг", "для", "до", "за", "из",
         "к", "кроме", "ко", "между", "мимо", "на", "над", "надо", "о", "об", "обо", "около", "от", "ото",
-        "перед", "передо", "по", "под", "подо", "после", "при", "про", "против", "ради", "с", "среди", "сзади",
+        "перед", "передо", "по", "под", "подо", "после", "при", "про", "против", "ради", "с", "со", "среди", "сзади",
         "снизу", "у", "а", "даже", "если", "и", "или", "как", "когда", "но", "пока", "пусть", "тоже", "не", "ни"
     ]
 
@@ -2005,6 +2470,13 @@ AggroBot.SpamDetector = class {
          * @private
          */
         this._outputBuffer = [];
+
+        /**
+         * Сообщение, повторяющееся при соответствующей категории флуда
+         * @type {string}
+         * @private
+         */
+        this._repeatedText = null;
         
     }
 
@@ -2024,17 +2496,25 @@ AggroBot.SpamDetector = class {
 
         if (this._buffer.length >= AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE) (() => {
 
-            // Проверяем на фразу о прекращении флуда
-            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                    request.type === AggroBot.Request.Type.TEXT &&
-                    /надоело|заебала?с|больше не буду/i.test(request.text)) return;
+            if (this.state === AggroBot.SpamDetector.State.IGNORING) {
 
-            // Если две последние фразы — не флуд, прекращаем игнорировать
-            const [last1, last2] = this._buffer.slice(-2);
-            if (this.state === AggroBot.SpamDetector.State.IGNORING &&
-                last1.type === AggroBot.Request.Type.TEXT && last2.type === AggroBot.Request.Type.TEXT &&
-                last1.text != last2.text &&
-                [last1, last2].every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
+                // Проверяем на фразу о прекращении флуда
+                if (request.type === AggroBot.Request.Type.TEXT && /надоело|заебала?с|больше не буду/i.test(request.text)) return;
+
+                // Если две последние фразы — не флуд, прекращаем игнорировать
+                const slice = this._buffer.slice(-2);
+                const [last1, last2] = slice;
+                if (last1.type === AggroBot.Request.Type.TEXT && last2.type === AggroBot.Request.Type.TEXT &&
+                    last1.text != last2.text &&
+                    (!this._repeatedText || !slice.map(request => AggroBot.SpamDetector.cleanString(request.text))
+                        .some(str => str == this._repeatedText)) &&
+                    !slice.some(request => this._outputBuffer.some(output => AggroBot.SpamDetector.stringsSimilar(request.text, output))) &&
+                    slice.every(request => AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP.test(request.text))) return;
+
+                result = "spam_ignoring";
+                return;
+
+            }
 
             let slice = this._buffer.slice(-AggroBot.SpamDetector.MESSAGES_TO_CHECK_SIMPLE);
             if (slice.every(request => request.type === AggroBot.Request.Type.TEXT)) {
@@ -2086,11 +2566,14 @@ AggroBot.SpamDetector = class {
                 // Проверяем на повторы
                 const clean = slice.map(AggroBot.SpamDetector.cleanString);
                 first = clean[0];
-                if (first && clean.every(str => str == first)) return result = "spam_repetition";
+                if (first && clean.every(str => str == first)) {
+                    this._repeatedText = first;
+                    return result = "spam_repetition";
+                }
 
                 // Проверяем на копирование за ботом
                 if (clean.some(str => str.length > 6) && clean.every(str => this._outputBuffer.some(output =>
-                        AggroBot.SpamDetector.levenshteinDistance(str, output) / Math.min(str.length, output.length) < 0.15))) {
+                        AggroBot.SpamDetector.stringsSimilar(str, output)))) {
                     return result = "spam_copying";
                 }
 
@@ -2135,7 +2618,10 @@ AggroBot.SpamDetector = class {
                     result = null;
                     break;
             }
-            else this.state = AggroBot.SpamDetector.State.ANALYZING;
+            else {
+                this._repeatedText = null;
+                this.state = AggroBot.SpamDetector.State.ANALYZING;
+            }
         }
 
         return {result, variables};
@@ -2158,14 +2644,19 @@ AggroBot.SpamDetector = class {
 };
 
 Object.assign(AggroBot.SpamDetector, {
-    
-    State: {
+
+    /**
+     * Состояния анализатора
+     * @enum
+     * @readonly
+     */
+    State: Object.freeze({
         ANALYZING: 0,
         DETECTED_FIRST: 1,
         DETECTED_SECOND: 2,
         IGNORING: 3
-    },
-    
+    }),
+
     BUFFER_SIZE: 4,
     OUTPUT_BUFFER_SIZE: 12,
     MESSAGES_TO_CHECK_SIMPLE: 3,
@@ -2173,10 +2664,38 @@ Object.assign(AggroBot.SpamDetector, {
     STICKERS_CONSIDERED_SPAM: 2,
     PHOTOS_CONSIDERED_SPAM: 3,
 
+    /**
+     * Удаляет лишние символы из строки и, если строка есть повтор её подстроки, убирает повторы и оставляет эту подстроку
+     * Иными словами, делает строку более подходящей для сравнения с другими строками
+     * @param {string} str
+     * @returns {string}
+     */
     cleanString(str) {
-        return str.toLowerCase().replace(/[^а-яёa-z0-9 ]/g, "").trim();
+
+        str = str.toLowerCase().replace(/[^а-яёa-z0-9 ]/g, "").trim();
+
+        const longestPrefixSuffix = [0];
+        let length = 0, i = 1;
+        while (i < str.length) {
+            if (str.charAt(i) == str.charAt(length)) longestPrefixSuffix[i++] = ++length;
+            else if (length != 0) length = longestPrefixSuffix[length - 1];
+            else longestPrefixSuffix[i++] = 0;
+        }
+
+        length = longestPrefixSuffix[str.length - 1];
+        const prefixLength = str.length - length;
+        if (length && str.length % prefixLength == 0) str = str.substr(0, prefixLength);
+
+        return str;
+
     },
 
+    /**
+     * Расстояние Левенштейна
+     * @param {string} str1
+     * @param {string} str2
+     * @returns {number}
+     */
     levenshteinDistance(str1, str2) {
 
         if (!str1 || !str2) return (str1 || str2).length;
@@ -2193,6 +2712,17 @@ Object.assign(AggroBot.SpamDetector, {
 
         return matrix[str2.length][str1.length];
 
+    },
+
+    /**
+     * Проверяет, достаточно ли две строки похожи друг на друга, тобы можно было считать вторую полученной путём
+     * копирования первой (или наоборот)
+     * @param {string} str1
+     * @param {string} str2
+     * @returns {boolean}
+     */
+    stringsSimilar(str1, str2) {
+        return AggroBot.SpamDetector.levenshteinDistance(str1, str2) / Math.min(str1.length, str2.length) < 0.15;
     },
 
     CHARACTER_NAMES: {
@@ -2253,8 +2783,9 @@ Object.assign(AggroBot.SpamDetector, {
 
 AggroBot.SpamDetector.COMMON_MESSAGE_REG_EXP = new RegExp(`([^а-яё]|^)(${AggroBot.SpamDetector.COMMON_WORDS.join("|")})([^а-яё]|$)|(${AggroBot.SpamDetector.COMMON_LETTER_COMBINATIONS.join("|")})`, "i");
 
-VPP.Chat.prototype.aggrobot = (command, ...args) => {
+VPP.Chat.prototype.aggrobot = function(command, ...args) {
 
+    command = command.split(" ")[0];
     switch (command) {
 
         case "download":
@@ -2267,6 +2798,34 @@ VPP.Chat.prototype.aggrobot = (command, ...args) => {
             $a.remove();
 
             break;
+
+        case "pause":
+
+            if (this.aggroBot.active) this.aggroBot.suspend();
+            break;
+
+        case "resume":
+
+            if (!this.aggroBot.active) {
+                if (!this.aggrobotWasActive) this.aggroBot.reset();
+                else this.aggroBot.resume();
+            }
+            break;
+
+        default:
+
+            if (!args.length) return;
+            const keys = [command].concat(args.filter((_, index) => index & 1));
+            const values = args.filter((_, index) => !(index & 1));
+            if (keys.length > values.length) keys.pop();
+            if (values.length > keys.length) values.pop();
+
+            keys.forEach((key, index) => {
+                if (!AggroBot.hasOwnProperty(key)) return;
+                AggroBot[key] = (value => value == "true" ? true : value == "false" ? false : value)(values[index]);
+                VPPScript.storage.set(key, AggroBot[key]);
+            });
+            VPPScript.storage.save();
 
     }
 
